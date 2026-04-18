@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Models & binaries (large, downloaded separately)
+models/
+bin/
+*.bin
+*.gguf
+*.onnx
+
+# Logs & runtime
+logs/
+*.log
+*.wav
+*.mp3
+captures/
+debug/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Secrets (just in case)
+.env
+*.key
