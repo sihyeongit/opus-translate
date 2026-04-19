@@ -24,14 +24,21 @@ class VadConfig:
     threshold: float = 0.5
     min_speech_ms: int = 300
     min_silence_ms: int = 300 #원래 500
-    max_segment_ms: int = 15000
+    # Cap per-segment length so we emit captions several times per sentence-cluster
+    # instead of waiting for a long silence (many speakers barely pause between
+    # sentences). Whisper still transcribes each chunk as multiple sub-segments.
+    max_segment_ms: int = 5000
 
 
 @dataclass(frozen=True)
 class AsrConfig:
     # faster-whisper model id (auto-downloaded from HF on first run).
-    # Short English-only segments run at RTF 1.5-7x on Ryzen AI 9 HX 370.
-    model_size: str = "small.en"
+    # small.en measured at RTF ~6x realtime on Ryzen AI 9 HX 370 (int8, beam=1)
+    # with large headroom, so we step up to medium.en for accuracy. medium is
+    # ~3x slower than small → still ~2x realtime at beam=1. Keep beam=1 here:
+    # combining medium.en with beam>=3 on CPU pushes RTF near 1.0 and risks
+    # falling behind the media if any burst of dense speech arrives.
+    model_size: str = "medium.en"
     device: str = "cpu"
     compute_type: str = "int8"
     language: str = "en"

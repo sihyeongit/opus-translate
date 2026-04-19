@@ -53,7 +53,13 @@ class FasterWhisperASR:
             dummy, language=self._language, beam_size=1, vad_filter=False,
         )[0])
 
-    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> str:
+    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> list[str]:
+        """Return one string per whisper sub-segment (≈ one sentence each).
+
+        Emitting sub-segments individually lets the caller push each sentence
+        to the translator independently, so subtitles stream at the speaker's
+        sentence pace instead of appearing as one long burst per VAD chunk.
+        """
         if sample_rate != 16000:
             raise ValueError(f"expected 16kHz audio, got {sample_rate}")
         if audio.dtype != np.float32:
@@ -69,9 +75,68 @@ class FasterWhisperASR:
                 no_speech_threshold=0.6,
                 log_progress=False,
             )
-            text = " ".join(seg.text for seg in segments).strip()
+            out: list[str] = []
+            for seg in segments:
+                for sentence in _split_sentences(seg.text):
+                    if sentence:
+                        out.append(sentence)
+            return _merge_short_fragments(out)
         except Exception:
             log.exception("faster-whisper transcribe failed")
-            return ""
+            return []
 
-        return text
+
+_SENTENCE_END = ".?!"
+_MIN_WORDS = 4  # fragments shorter than this are merged with the next sentence
+
+
+def _merge_short_fragments(sentences: list[str]) -> list[str]:
+    """Merge sub-4-word fragments into the following sentence.
+
+    Whisper sometimes emits very short segments like "Absolutely." or "Right."
+    as standalone lines. On their own they translate poorly (no context) and
+    clutter the overlay. Appending them to the next sentence gives NLLB enough
+    context to choose the right register ("그렇습니다" vs "맞아요" etc.).
+    """
+    if not sentences:
+        return sentences
+    out: list[str] = []
+    pending = ""
+    for sent in sentences:
+        combined = (pending + " " + sent).strip() if pending else sent
+        if len(combined.split()) < _MIN_WORDS and sent is not sentences[-1]:
+            pending = combined
+        else:
+            out.append(combined)
+            pending = ""
+    if pending:
+        if out:
+            out[-1] = out[-1] + " " + pending
+        else:
+            out.append(pending)
+    return out
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split whisper text into sentences on .?! while keeping the punctuation.
+
+    Whisper usually yields one sentence per sub-segment, but occasionally packs
+    two or three together ("Absolutely. Does it create..."). Splitting here
+    keeps each caption to a single sentence without losing terminal punctuation.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    out: list[str] = []
+    buf: list[str] = []
+    for ch in text:
+        buf.append(ch)
+        if ch in _SENTENCE_END:
+            piece = "".join(buf).strip()
+            if piece:
+                out.append(piece)
+            buf = []
+    tail = "".join(buf).strip()
+    if tail:
+        out.append(tail)
+    return out

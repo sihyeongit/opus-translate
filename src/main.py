@@ -8,6 +8,25 @@ from __future__ import annotations
 
 import logging
 import queue
+
+# Windows symlink workaround: huggingface_hub creates symlinks in its cache
+# which requires Developer Mode on Windows. Patch _create_symlink to fall back
+# to a plain file copy when symlink creation fails.
+try:
+    import shutil as _shutil
+    import huggingface_hub.file_download as _hfd
+
+    _orig_symlink = _hfd._create_symlink
+
+    def _symlink_with_copy_fallback(src, dst, new_blob=False):
+        try:
+            _orig_symlink(src, dst, new_blob=new_blob)
+        except OSError:
+            _shutil.copy2(src, dst)
+
+    _hfd._create_symlink = _symlink_with_copy_fallback
+except Exception:
+    pass
 import signal
 import sys
 import threading
@@ -122,25 +141,26 @@ class Pipeline:
             seg_ms = segment.end_ms - segment.start_ms
             t0 = time.time()
             try:
-                text = self.asr.transcribe(segment.audio)
+                sentences = self.asr.transcribe(segment.audio)
             except Exception:
                 log.exception("ASR failed")
                 continue
             asr_ms = int((time.time() - t0) * 1000)
-            text = text.strip()
-            if not text or _is_noise(text):
-                continue
             if asr_ms > seg_ms:
                 log.warning("ASR slower than realtime: seg=%dms, asr=%dms (backlog=%d)",
                             seg_ms, asr_ms, self._asr_q.qsize())
-            try:
-                self._mt_q.put(
-                    TranscribedSegment(en=text, start_ms=segment.start_ms, end_ms=segment.end_ms,
-                                       seg_ms=seg_ms, asr_ms=asr_ms),
-                    timeout=1.0,
-                )
-            except queue.Full:
-                log.warning("MT queue full; dropping transcription")
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence or _is_noise(sentence):
+                    continue
+                try:
+                    self._mt_q.put(
+                        TranscribedSegment(en=sentence, start_ms=segment.start_ms,
+                                           end_ms=segment.end_ms, seg_ms=seg_ms, asr_ms=asr_ms),
+                        timeout=1.0,
+                    )
+                except queue.Full:
+                    log.warning("MT queue full; dropping transcription")
 
     def _mt_loop(self) -> None:
         while not self._stop.is_set():
