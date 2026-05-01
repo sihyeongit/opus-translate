@@ -27,6 +27,7 @@ class FasterWhisperASR:
         beam_size: int = 1,
         language: str = "en",
         download_root: Optional[str] = None,
+        initial_prompt: str = "",
     ):
         from faster_whisper import WhisperModel
 
@@ -44,6 +45,7 @@ class FasterWhisperASR:
         )
         self._beam_size = beam_size
         self._language = language
+        self._initial_prompt = initial_prompt or ""
         log.info("faster-whisper model ready (resident)")
 
     def warm_up(self) -> None:
@@ -71,7 +73,11 @@ class FasterWhisperASR:
                 language=self._language,
                 beam_size=self._beam_size,
                 vad_filter=False,  # we do our own VAD upstream
+                # condition_on_previous_text only matters for >30s audio
+                # (multi-window chunking). Our chunks are always ~5s, so leaving
+                # it False avoids any implicit state while costing nothing.
                 condition_on_previous_text=False,
+                initial_prompt=self._initial_prompt or None,
                 no_speech_threshold=0.6,
                 log_progress=False,
             )

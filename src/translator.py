@@ -47,6 +47,15 @@ class NLLBTranslator:
         self._beam_size = beam_size
 
     def translate(self, text: str) -> str:
+        """Translate *text* from English to Korean.
+
+        Per-sentence, stateless. We tried feeding previous src/tgt as encoder
+        context + forced target_prefix, but NLLB (not trained for multi-sentence
+        inputs with prefixes) re-translated content that was dropped from the
+        prev translation, producing duplicated phrases ("기억이 나지 않습니다."
+        → next output: "확실히 내 인생에서. 시간, 이렇게 많은 위험."). The
+        approach also doubled MT cost and contended with Whisper on CPU.
+        """
         text = text.strip()
         if not text:
             return ""

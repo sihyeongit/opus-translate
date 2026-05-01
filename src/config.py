@@ -45,6 +45,11 @@ class AsrConfig:
     cpu_threads: int = 12
     num_workers: int = 2
     beam_size: int = 1
+    # No initial_prompt. On medium.en CPU int8 each prompt token costs ~25ms of
+    # decoder time; even a 14-token hint added ~350ms and pushed RTF over 1.0
+    # (measured 5120-6621ms for 4992ms chunks). The domain-bias win is small
+    # compared to the cost of falling behind realtime.
+    initial_prompt: str = ""
 
 
 @dataclass(frozen=True)

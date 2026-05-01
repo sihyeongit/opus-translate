@@ -83,6 +83,7 @@ class Pipeline:
             num_workers=CONFIG.asr.num_workers,
             beam_size=CONFIG.asr.beam_size,
             language=CONFIG.asr.language,
+            initial_prompt=CONFIG.asr.initial_prompt,
         )
         self.asr.warm_up()
         self.translator = NLLBTranslator(
@@ -132,12 +133,45 @@ class Pipeline:
         except Exception:
             log.exception("VAD loop crashed")
 
+    # Buffer fragments that don't end with a sentence terminator until the next
+    # VAD chunk arrives. Prevents VAD's 5s time-cut from producing headless
+    # fragments like "now more than five years old." (no subject, no context).
+    _SENTENCE_BUFFER_MAX_WORDS = 40  # force-flush if pending grows past this
+    _SENTENCE_BUFFER_MAX_AGE_S = 3.0  # force-flush if pending is older than this
+
     def _asr_loop(self) -> None:
+        pending_text = ""
+        pending_start_ms = 0
+        pending_end_ms = 0
+        pending_asr_ms = 0
+        pending_wall_t = 0.0
+
+        def emit(text: str, start_ms: int, end_ms: int, asr_ms: int) -> None:
+            text = text.strip()
+            if not text or _is_noise(text):
+                return
+            try:
+                self._mt_q.put(
+                    TranscribedSegment(
+                        en=text, start_ms=start_ms, end_ms=end_ms,
+                        seg_ms=end_ms - start_ms, asr_ms=asr_ms,
+                    ),
+                    timeout=1.0,
+                )
+            except queue.Full:
+                log.warning("MT queue full; dropping transcription")
+
         while not self._stop.is_set():
             try:
                 segment = self._asr_q.get(timeout=0.5)
             except queue.Empty:
+                # Stale pending → force flush so a trailing fragment at the end
+                # of a talk doesn't get stuck forever.
+                if pending_text and (time.time() - pending_wall_t) > self._SENTENCE_BUFFER_MAX_AGE_S:
+                    emit(pending_text, pending_start_ms, pending_end_ms, pending_asr_ms)
+                    pending_text = ""
                 continue
+
             seg_ms = segment.end_ms - segment.start_ms
             t0 = time.time()
             try:
@@ -149,18 +183,39 @@ class Pipeline:
             if asr_ms > seg_ms:
                 log.warning("ASR slower than realtime: seg=%dms, asr=%dms (backlog=%d)",
                             seg_ms, asr_ms, self._asr_q.qsize())
-            for sentence in sentences:
-                sentence = sentence.strip()
-                if not sentence or _is_noise(sentence):
+
+            if not sentences:
+                continue
+
+            # Merge pending fragment into the first sentence of this chunk.
+            if pending_text:
+                sentences[0] = pending_text + " " + sentences[0]
+                start_ms = pending_start_ms
+            else:
+                start_ms = segment.start_ms
+            pending_text = ""
+
+            last_idx = len(sentences) - 1
+            for i, sent in enumerate(sentences):
+                sent = sent.strip()
+                if not sent:
                     continue
-                try:
-                    self._mt_q.put(
-                        TranscribedSegment(en=sentence, start_ms=segment.start_ms,
-                                           end_ms=segment.end_ms, seg_ms=seg_ms, asr_ms=asr_ms),
-                        timeout=1.0,
-                    )
-                except queue.Full:
-                    log.warning("MT queue full; dropping transcription")
+                is_last = (i == last_idx)
+                ends_cleanly = sent[-1] in ".?!"
+                word_count = len(sent.split())
+
+                # Hold the trailing fragment until next chunk, unless it's
+                # already long (safety cap).
+                if is_last and not ends_cleanly and word_count < self._SENTENCE_BUFFER_MAX_WORDS:
+                    pending_text = sent
+                    pending_start_ms = start_ms
+                    pending_end_ms = segment.end_ms
+                    pending_asr_ms = asr_ms
+                    pending_wall_t = time.time()
+                else:
+                    emit(sent, start_ms, segment.end_ms, asr_ms)
+                    # Subsequent sentences in this chunk start after the previous one.
+                    start_ms = segment.end_ms
 
     def _mt_loop(self) -> None:
         while not self._stop.is_set():
@@ -183,9 +238,37 @@ class Pipeline:
 
 _NOISE_TOKENS = {"[music]", "[silence]", "(music)", "(silence)", ".", ",", "..."}
 
+# Whisper frequently hallucinates these YouTube-ending clichés on ambiguous or
+# low-energy audio because they saturate its training data. Match only when the
+# entire sentence is the phrase, so we never drop legitimate speech that merely
+# contains the substring.
+_YT_HALLUCINATIONS = {
+    "thanks for watching",
+    "thank you for watching",
+    "thanks for watching!",
+    "like and subscribe",
+    "please subscribe",
+    "don't forget to subscribe",
+    "see you next time",
+    "see you in the next video",
+    "see you in the next one",
+    "smash the like button",
+    "hit the like button",
+    "subscribe to my channel",
+    "bye",
+    "bye!",
+    "goodbye",
+}
+
 
 def _is_noise(text: str) -> bool:
-    return text.strip().lower() in _NOISE_TOKENS
+    t = text.strip().lower()
+    if t in _NOISE_TOKENS:
+        return True
+    stripped = t.rstrip(".!?,;: ")
+    if stripped in _YT_HALLUCINATIONS:
+        return True
+    return False
 
 
 def _install_hotkeys(overlay: SubtitleOverlay, app: QApplication) -> None:

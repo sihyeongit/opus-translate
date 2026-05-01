@@ -1,5 +1,6 @@
 PyAudioWPatch>=0.2.12
 silero-vad>=5.1,<7
+faster-whisper>=1.1
 ctranslate2>=4.5
 transformers>=4.46
 sentencepiece>=0.2
@@ -11,3 +12,4 @@ pywin32>=308
 huggingface-hub>=0.27
 requests>=2.32
 tqdm>=4.67
+pytest>=8.0

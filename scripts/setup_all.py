@@ -1,4 +1,4 @@
-"""One-shot setup: whisper.cpp binary + GGML model + NLLB CT2 conversion."""
+"""One-shot setup for the current runtime path."""
 from __future__ import annotations
 
 import logging
@@ -8,13 +8,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import download_whisper
+import setup_asr
 import setup_nllb
 
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    rc = download_whisper.main()
+    rc = setup_asr.main()
     if rc != 0:
         return rc
     return setup_nllb.main()
