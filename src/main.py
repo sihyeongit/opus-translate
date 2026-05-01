@@ -43,6 +43,7 @@ from .asr import FasterWhisperASR
 from .audio_capture import LoopbackCapture
 from .config import CONFIG
 from .overlay import SubtitleOverlay
+from .quality import QualityUtterance, TranslationQualityProcessor
 from .translator import NLLBTranslator
 from .vad import SileroVAD, SpeechSegment
 
@@ -98,6 +99,7 @@ class Pipeline:
             beam_size=CONFIG.mt.beam_size,
             context_window=CONFIG.mt.context_window,
         )
+        self.quality = TranslationQualityProcessor(CONFIG.quality)
 
         self._asr_q: queue.Queue[SpeechSegment] = queue.Queue(maxsize=16)
         self._mt_q: queue.Queue[TranscribedSegment] = queue.Queue(maxsize=16)
@@ -150,21 +152,25 @@ class Pipeline:
             text = text.strip()
             if not text or _is_noise(text):
                 return
-            try:
-                self._mt_q.put(
-                    TranscribedSegment(
-                        en=text, start_ms=start_ms, end_ms=end_ms,
-                        seg_ms=end_ms - start_ms, asr_ms=asr_ms,
-                    ),
-                    timeout=1.0,
+            ready = self.quality.offer_utterance(
+                QualityUtterance(
+                    text=text,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    seg_ms=end_ms - start_ms,
+                    asr_ms=asr_ms,
                 )
-            except queue.Full:
-                log.warning("MT queue full; dropping transcription")
+            )
+            for utterance in ready:
+                self._put_mt(utterance)
 
         while not self._stop.is_set():
             try:
                 segment = self._asr_q.get(timeout=0.5)
             except queue.Empty:
+                stale = self.quality.flush_stale()
+                if stale is not None:
+                    self._put_mt(stale)
                 # Stale pending → force flush so a trailing fragment at the end
                 # of a talk doesn't get stuck forever.
                 if pending_text and (time.time() - pending_wall_t) > self._SENTENCE_BUFFER_MAX_AGE_S:
@@ -229,11 +235,27 @@ class Pipeline:
             except Exception:
                 log.exception("Translation failed")
                 continue
+            ko = self.quality.postprocess_ko(item.en, ko)
             mt_ms = int((time.time() - t0) * 1000)
             if ko:
                 self.overlay.push_caption(en=item.en, ko=ko)
                 log.info("seg=%dms asr=%dms mt=%dms | EN: %s | KO: %s",
                          item.seg_ms, item.asr_ms, mt_ms, item.en, ko)
+
+    def _put_mt(self, item: QualityUtterance) -> None:
+        try:
+            self._mt_q.put(
+                TranscribedSegment(
+                    en=item.text,
+                    start_ms=item.start_ms,
+                    end_ms=item.end_ms,
+                    seg_ms=item.seg_ms,
+                    asr_ms=item.asr_ms,
+                ),
+                timeout=1.0,
+            )
+        except queue.Full:
+            log.warning("MT queue full; dropping transcription")
 
 
 _NOISE_TOKENS = {"[music]", "[silence]", "(music)", "(silence)", ".", ",", "..."}

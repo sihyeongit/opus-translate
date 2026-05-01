@@ -24,10 +24,9 @@ class VadConfig:
     threshold: float = 0.5
     min_speech_ms: int = 300
     min_silence_ms: int = 300 #원래 500
-    # Cap per-segment length so we emit captions several times per sentence-cluster
-    # instead of waiting for a long silence (many speakers barely pause between
-    # sentences). Whisper still transcribes each chunk as multiple sub-segments.
-    max_segment_ms: int = 5000
+    # 8s keeps ASR comfortably below realtime on the target CPU while reducing
+    # the sentence damage caused by cutting dense speech every 5s.
+    max_segment_ms: int = 8000
 
 
 @dataclass(frozen=True)
@@ -67,6 +66,27 @@ class TranslatorConfig:
 
 
 @dataclass(frozen=True)
+class TranslationQualityConfig:
+    # fast: lowest latency, balanced: default, quality: more context merging.
+    profile: str = "balanced"
+    merge_short_utterances: bool = True
+    min_standalone_words: int = 5
+    max_merge_words: int = 28
+    max_hold_s: float = 1.6
+    preserve_terms: tuple[str, ...] = (
+        "API", "CPU", "GPU", "NPU", "GPT", "ChatGPT", "OpenAI", "Whisper",
+        "NLLB", "Vulkan", "Windows", "YouTube", "Netflix", "Zoom", "Python",
+        "JavaScript", "SQL", "GitHub",
+    )
+    phrase_fixes: tuple[tuple[str, str, str], ...] = (
+        ("resident in memory", "모델 레지던트를 기억해야 합니다", "모델을 메모리에 상주시켜야 합니다"),
+        ("resident in memory", "모형 거주자를 기억해야 합니다", "모델을 메모리에 상주시켜야 합니다"),
+        ("keep the model resident", "모델 레지던트를 기억해야 합니다", "모델을 메모리에 상주시켜야 합니다"),
+        ("falling behind the audio", "오디오 뒤에 떨어지지 않는", "오디오보다 뒤처지지 않는"),
+    )
+
+
+@dataclass(frozen=True)
 class OverlayConfig:
     font_family: str = "Pretendard"
     font_family_fallback: str = "Malgun Gothic"
@@ -91,6 +111,7 @@ class AppConfig:
     vad: VadConfig = field(default_factory=VadConfig)
     asr: AsrConfig = field(default_factory=AsrConfig)
     mt: TranslatorConfig = field(default_factory=TranslatorConfig)
+    quality: TranslationQualityConfig = field(default_factory=TranslationQualityConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
 
