@@ -44,6 +44,7 @@ from .audio_capture import LoopbackCapture
 from .config import CONFIG
 from .overlay import SubtitleOverlay
 from .quality import QualityUtterance, TranslationQualityProcessor
+from .segment_merge import ShortAudioSegmentMerger
 from .translator import NLLBTranslator
 from .vad import SileroVAD, SpeechSegment
 
@@ -85,6 +86,9 @@ class Pipeline:
             beam_size=CONFIG.asr.beam_size,
             language=CONFIG.asr.language,
             initial_prompt=CONFIG.asr.initial_prompt,
+            temperature=CONFIG.asr.temperature,
+            max_new_tokens=CONFIG.asr.max_new_tokens,
+            without_timestamps=CONFIG.asr.without_timestamps,
         )
         self.asr.warm_up()
         self.translator = NLLBTranslator(
@@ -100,6 +104,7 @@ class Pipeline:
             context_window=CONFIG.mt.context_window,
         )
         self.quality = TranslationQualityProcessor(CONFIG.quality)
+        self.segment_merger = ShortAudioSegmentMerger(CONFIG.segment_merge)
 
         self._asr_q: queue.Queue[SpeechSegment] = queue.Queue(maxsize=16)
         self._mt_q: queue.Queue[TranscribedSegment] = queue.Queue(maxsize=16)
@@ -164,19 +169,9 @@ class Pipeline:
             for utterance in ready:
                 self._put_mt(utterance)
 
-        while not self._stop.is_set():
-            try:
-                segment = self._asr_q.get(timeout=0.5)
-            except queue.Empty:
-                stale = self.quality.flush_stale()
-                if stale is not None:
-                    self._put_mt(stale)
-                # Stale pending → force flush so a trailing fragment at the end
-                # of a talk doesn't get stuck forever.
-                if pending_text and (time.time() - pending_wall_t) > self._SENTENCE_BUFFER_MAX_AGE_S:
-                    emit(pending_text, pending_start_ms, pending_end_ms, pending_asr_ms)
-                    pending_text = ""
-                continue
+        def process_segment(segment: SpeechSegment) -> None:
+            nonlocal pending_text, pending_start_ms, pending_end_ms
+            nonlocal pending_asr_ms, pending_wall_t
 
             seg_ms = segment.end_ms - segment.start_ms
             t0 = time.time()
@@ -184,14 +179,14 @@ class Pipeline:
                 sentences = self.asr.transcribe(segment.audio)
             except Exception:
                 log.exception("ASR failed")
-                continue
+                return
             asr_ms = int((time.time() - t0) * 1000)
             if asr_ms > seg_ms:
                 log.warning("ASR slower than realtime: seg=%dms, asr=%dms (backlog=%d)",
                             seg_ms, asr_ms, self._asr_q.qsize())
 
             if not sentences:
-                continue
+                return
 
             # Merge pending fragment into the first sentence of this chunk.
             if pending_text:
@@ -222,6 +217,27 @@ class Pipeline:
                     emit(sent, start_ms, segment.end_ms, asr_ms)
                     # Subsequent sentences in this chunk start after the previous one.
                     start_ms = segment.end_ms
+
+        while not self._stop.is_set():
+            try:
+                segment = self._asr_q.get(timeout=0.5)
+            except queue.Empty:
+                stale_segment = self.segment_merger.flush_stale()
+                if stale_segment is not None:
+                    process_segment(stale_segment)
+                    continue
+                stale = self.quality.flush_stale()
+                if stale is not None:
+                    self._put_mt(stale)
+                # Stale pending → force flush so a trailing fragment at the end
+                # of a talk doesn't get stuck forever.
+                if pending_text and (time.time() - pending_wall_t) > self._SENTENCE_BUFFER_MAX_AGE_S:
+                    emit(pending_text, pending_start_ms, pending_end_ms, pending_asr_ms)
+                    pending_text = ""
+                continue
+
+            for ready_segment in self.segment_merger.offer(segment):
+                process_segment(ready_segment)
 
     def _mt_loop(self) -> None:
         while not self._stop.is_set():

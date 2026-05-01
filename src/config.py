@@ -44,6 +44,11 @@ class AsrConfig:
     cpu_threads: int = 12
     num_workers: int = 2
     beam_size: int = 1
+    # Real-time captions should not spend tens of seconds retrying ambiguous
+    # audio with temperature fallbacks. Keep decoding deterministic and bounded.
+    temperature: float = 0.0
+    max_new_tokens: int = 96
+    without_timestamps: bool = True
     # No initial_prompt. On medium.en CPU int8 each prompt token costs ~25ms of
     # decoder time; even a 14-token hint added ~350ms and pushed RTF over 1.0
     # (measured 5120-6621ms for 4992ms chunks). The domain-bias win is small
@@ -87,11 +92,23 @@ class TranslationQualityConfig:
 
 
 @dataclass(frozen=True)
+class AsrSegmentMergeConfig:
+    # fast: disabled, balanced: conservative merge, quality: stronger merge.
+    profile: str = "balanced"
+    enabled: bool = True
+    short_segment_ms: int = 3500
+    target_min_segment_ms: int = 3500
+    max_hold_ms: int = 1200
+    min_flush_segment_ms: int = 1200
+    max_merged_segment_ms: int = 8000
+
+
+@dataclass(frozen=True)
 class OverlayConfig:
     font_family: str = "Pretendard"
     font_family_fallback: str = "Malgun Gothic"
-    ko_font_size: int = 28
-    en_font_size: int = 18
+    ko_font_size: int = 24
+    en_font_size: int = 15
     max_lines: int = 2
     bottom_margin_px: int = 80
     width_ratio: float = 0.8
@@ -112,6 +129,7 @@ class AppConfig:
     asr: AsrConfig = field(default_factory=AsrConfig)
     mt: TranslatorConfig = field(default_factory=TranslatorConfig)
     quality: TranslationQualityConfig = field(default_factory=TranslationQualityConfig)
+    segment_merge: AsrSegmentMergeConfig = field(default_factory=AsrSegmentMergeConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
 

@@ -11,6 +11,7 @@ PC 내부 오디오를 실시간으로 캡처해 **영어 → 한국어**로 번
 - **완전 오프라인 / 무료** — 외부 API 호출 없음, 오픈소스 모델·런타임만 사용
 - **고품질 번역** — faster-whisper `medium.en` + Meta NLLB-200 조합
 - **상주형 ASR** — Whisper 모델을 프로세스 안에 유지해 발화마다 모델을 다시 로드하지 않음
+- **짧은 음성 병합** — 짧은 VAD 조각을 잠깐 모아 Whisper 호출 횟수와 문장 절단을 줄임
 - **자막 품질 보정** — 짧은 발화 병합, 고유명사 보존, 반복 번역 후처리
 - **투명 오버레이 자막** — 영상 위에 덧붙는 항상-위, 클릭-통과 UI
 - **듀얼 언어 표시** — 영어 원문 + 한국어 번역 동시 (핫키로 전환)
@@ -67,6 +68,7 @@ opus-translate/
 │   ├── config.py         # 경로, 핫키, 모델 설정
 │   ├── audio_capture.py  # WASAPI 루프백 캡처
 │   ├── vad.py            # Silero VAD 래퍼
+│   ├── segment_merge.py  # ASR 전 짧은 음성 조각 병합
 │   ├── asr.py            # faster-whisper ASR 래퍼
 │   ├── translator.py     # NLLB (CTranslate2) 래퍼
 │   ├── quality.py        # 번역 전/후처리 품질 보정

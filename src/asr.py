@@ -28,6 +28,9 @@ class FasterWhisperASR:
         language: str = "en",
         download_root: Optional[str] = None,
         initial_prompt: str = "",
+        temperature: float = 0.0,
+        max_new_tokens: int = 96,
+        without_timestamps: bool = True,
     ):
         from faster_whisper import WhisperModel
 
@@ -46,6 +49,9 @@ class FasterWhisperASR:
         self._beam_size = beam_size
         self._language = language
         self._initial_prompt = initial_prompt or ""
+        self._temperature = temperature
+        self._max_new_tokens = max_new_tokens
+        self._without_timestamps = without_timestamps
         log.info("faster-whisper model ready (resident)")
 
     def warm_up(self) -> None:
@@ -78,6 +84,9 @@ class FasterWhisperASR:
                 # it False avoids any implicit state while costing nothing.
                 condition_on_previous_text=False,
                 initial_prompt=self._initial_prompt or None,
+                temperature=self._temperature,
+                max_new_tokens=self._max_new_tokens,
+                without_timestamps=self._without_timestamps,
                 no_speech_threshold=0.6,
                 log_progress=False,
             )
